@@ -1,98 +1,83 @@
+# Energy Consumption Forecasting using LSTM
+# Author: Madeeha Rehan
+# Description: Predicts future energy consumption using time-series data
+
+# Step 1: Import libraries
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error
 import matplotlib.pyplot as plt
-import tensorflow as tf
+from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 
-# Load data
-file_path = 'data/household_power_consumption.txt'
+# Step 2: Load and preprocess data
+df = pd.read_csv('household_power_consumption.txt', sep=';',
+                 parse_dates={'datetime':[0,1]}, infer_datetime_format=True,
+                 low_memory=False, na_values=['?'])
 
-# Data has ; separator, missing values are '?'
-df = pd.read_csv(file_path, sep=';', low_memory=False, na_values='?')
+# Fill missing data
+df.fillna(method='ffill', inplace=True)
 
-# Combine Date and Time columns and convert to datetime
-df['Datetime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], dayfirst=True)
+# Select the target variable and set datetime as index
+data = df[['datetime', 'Global_active_power']].set_index('datetime')
 
-# Sort by datetime
-df = df.sort_values('Datetime')
+# Plot the original data
+plt.figure(figsize=(12,4))
+plt.plot(data['Global_active_power'])
+plt.title('Global Active Power Over Time')
+plt.show()
 
-# Use only relevant column: Global_active_power (energy consumption in kilowatts)
-data = df[['Datetime', 'Global_active_power']].copy()
-
-# Drop rows with missing values
-data = data.dropna()
-
-# Reset index
-data = data.reset_index(drop=True)
-
-# Resample to hourly average (to reduce noise and size)
-data = data.set_index('Datetime').resample('H').mean().reset_index()
-
-# Scale data between 0 and 1
+# Step 3: Normalize data
 scaler = MinMaxScaler()
-data['Global_active_power_scaled'] = scaler.fit_transform(data[['Global_active_power']])
+scaled_data = scaler.fit_transform(data)
 
-# Create sequences for LSTM (past 24 hours to predict next hour)
-SEQ_LEN = 24
-
-def create_sequences(data_series, seq_length=SEQ_LEN):
+# Step 4: Create sequences
+def create_sequences(data, seq_length=24):
     X, y = [], []
-    for i in range(len(data_series) - seq_length):
-        X.append(data_series[i:i+seq_length])
-        y.append(data_series[i+seq_length])
+    for i in range(len(data) - seq_length):
+        X.append(data[i:i+seq_length])
+        y.append(data[i+seq_length])
     return np.array(X), np.array(y)
 
-X, y = create_sequences(data['Global_active_power_scaled'].values)
+SEQ_LENGTH = 24
+X, y = create_sequences(scaled_data, SEQ_LENGTH)
 
-# Split into train and test (80/20 split)
-split_idx = int(len(X) * 0.8)
+# Reshape X for LSTM input: (samples, timesteps, features)
+X = X.reshape((X.shape[0], X.shape[1], 1))
+
+print(f'Shape of X: {X.shape}, Shape of y: {y.shape}')
+
+# Step 5: Train-test split (80-20)
+split_idx = int(0.8 * len(X))
 X_train, X_test = X[:split_idx], X[split_idx:]
 y_train, y_test = y[:split_idx], y[split_idx:]
 
-# Reshape for LSTM: (samples, time_steps, features)
-X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
-X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
-
-# Build LSTM model
+# Step 6: Build LSTM model
 model = Sequential([
-    LSTM(50, return_sequences=True, input_shape=(SEQ_LEN, 1)),
-    Dropout(0.2),
-    LSTM(25),
+    LSTM(100, input_shape=(SEQ_LENGTH, 1)),
     Dropout(0.2),
     Dense(1)
 ])
 
 model.compile(optimizer='adam', loss='mse')
+model.summary()
 
-# Train model
-history = model.fit(
-    X_train, y_train,
-    epochs=20,
-    batch_size=64,
-    validation_split=0.1,
-    verbose=1
-)
+# Step 7: Train the model
+history = model.fit(X_train, y_train, epochs=20, batch_size=32,
+                    validation_data=(X_test, y_test))
 
-# Predict on test data
+# Step 8: Predict and inverse scale
 y_pred = model.predict(X_test)
 
-# Inverse transform to get real energy consumption values
 y_test_inv = scaler.inverse_transform(y_test.reshape(-1,1))
 y_pred_inv = scaler.inverse_transform(y_pred)
 
-# Calculate RMSE
-rmse = np.sqrt(mean_squared_error(y_test_inv, y_pred_inv))
-print(f'Test RMSE: {rmse:.3f} kW')
-
-# Plot actual vs predicted energy consumption
-plt.figure(figsize=(12,6))
-plt.plot(y_test_inv[:200], label='Actual')
-plt.plot(y_pred_inv[:200], label='Predicted')
-plt.title('Energy Consumption Forecasting (UCI Dataset)')
-plt.xlabel('Time Steps (hours)')
-plt.ylabel('Global Active Power (kW)')
+# Step 9: Plot results
+plt.figure(figsize=(12,4))
+plt.plot(y_test_inv, label='Actual')
+plt.plot(y_pred_inv, label='Predicted')
+plt.title('Energy Consumption Forecast (LSTM)')
+plt.xlabel('Time Steps')
+plt.ylabel('Global Active Power')
 plt.legend()
 plt.show()
